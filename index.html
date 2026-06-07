@@ -8,7 +8,7 @@
 <!--
   =====================================================================
   ANSU & SAYANTANI : OUR LITTLE LOVE WORLD
-  A single-file 3D web game gift built with Three.js + PeerJS.
+  A single-file 3D web game gift built with Three.js + Firebase Realtime DB.
   Features: dual-track romantic audio + mute, drag-to-look camera, click
   boing/pop + heart bursts, real-time 2-player chat & movement sync, wobbly
   penguin characters, candle-blowing cake, and a password portal to a gallery.
@@ -354,7 +354,8 @@
 
 <!-- Libraries (loaded by the player's browser) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 
 <script>
 "use strict";
@@ -378,6 +379,21 @@ const CONFIG = {
 
 // Shorthand DOM helper
 const $ = (id) => document.getElementById(id);
+
+/* =====================================================================
+   0b. FIREBASE INIT (live Realtime Database credentials)
+   ===================================================================== */
+const firebaseConfig = {
+  apiKey: "AIzaSyDkJosjZYdjmd_FgG_AeeaOTrdfOsIvqcg",
+  authDomain: "ansu-game-1.firebaseapp.com",
+  projectId: "ansu-game-1",
+  storageBucket: "ansu-game-1.firebasestorage.app",
+  messagingSenderId: "674966270857",
+  appId: "1:674966270857:web:fd0340faa5e3c5b31c6758",
+  measurementId: "G-V1EN0KDFBF"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
 
 /* =====================================================================
    1. AUDIO  (dual-track music: romantic BGM -> "Apocalypse" + synth SFX)
@@ -832,6 +848,7 @@ const ME = { who:null, other:null };
 const keys = {};
 const move = { x:0, z:0 };       // analog input (-1..1)
 let lastPos = new THREE.Vector3();
+let lastNetSent = 0;
 
 window.addEventListener("keydown", (e)=>{
   if (document.activeElement === $("chat-input") || document.activeElement === $("pass-input")) return;
@@ -841,162 +858,132 @@ window.addEventListener("keydown", (e)=>{
 window.addEventListener("keyup", (e)=>{ keys[e.key.toLowerCase()] = false; });
 
 /* =====================================================================
-   6. NETWORKING (PeerJS — deterministic IDs, no signup needed)
+   6. NETWORKING (Firebase Realtime Database — presence, movement, chat)
    ===================================================================== */
 const Net = {
-  peer:null, conn:null, connected:false, retry:null, recreateTimer:null, tries:0, dead:false,
-  start(){
-    this.dead = false;
-    this.createPeer();
-  },
-  createPeer(){
-    const myId  = `${CONFIG.ROOM}-${ME.who}`;
-    const otherId = `${CONFIG.ROOM}-${ME.other}`;
-    try {
-      this.peer = new Peer(myId, { debug:1 });
-    } catch(e){ this.setStatus(false,"offline"); return; }
+  base:`rooms/${CONFIG.ROOM}`,
+  meRef:null, otherRef:null, chatsRef:null, candlesRef:null, portalRef:null, connRef:null,
+  connected:false, joinReady:false, lastSent:0,
 
-    this.peer.on("open", ()=>{
-      this.tries = 0;
-      if (!this.connected) this.setStatus(false,"waiting for partner…");
-      this.tryConnect(otherId);
-      clearInterval(this.retry);
-      this.retry = setInterval(()=>{ if(!this.connected) this.tryConnect(otherId); }, 4000);
+  start(){
+    const me = characters[ME.who];
+    this.meRef      = db.ref(`${this.base}/${ME.who}`);
+    this.otherRef   = db.ref(`${this.base}/${ME.other}`);
+    this.chatsRef   = db.ref(`${this.base}/chats`);
+    this.candlesRef = db.ref(`${this.base}/candles`);
+    this.portalRef  = db.ref(`${this.base}/portal`);
+    this.connRef    = db.ref(".info/connected");
+
+    // ---- Presence: write my active state + auto-remove when I disconnect ----
+    // onDisconnect().remove() makes Firebase delete my node the instant the tab
+    // closes/refreshes or the socket drops — so there's no stale session and
+    // the partner sees me leave cleanly (this is what kills the old red loop).
+    const writePresence = ()=> this.meRef.set({
+      who: ME.who,
+      x: +me.position.x.toFixed(2),
+      z: +me.position.z.toFixed(2),
+      r: +me.rotation.y.toFixed(2),
+      active: true,
+      ts: firebase.database.ServerValue.TIMESTAMP
     });
-    // someone connects to us
-    this.peer.on("connection", (c)=>{ this.bind(c); });
-    this.peer.on("error", (err)=>{
-      const type = err && err.type;
-      // Partner simply isn't online yet — the retry interval keeps trying.
-      if (type === "peer-unavailable") return;
-      // "unavailable-id"  => a stale (just-refreshed) session still owns our ID.
-      // network/server/socket errors => transient broker hiccups.
-      // In every one of these cases we tear the peer down and spin up a FRESH
-      // session on our deterministic ID, so we recover to green instead of
-      // getting stuck forever on "reconnecting…".
-      if (!this.connected){
-        this.setStatus(false,"reconnecting…");
-        this.scheduleRecreate();
+
+    // ---- Connection handshake -> turns the status dot green when synced ----
+    this.connRef.on("value", (snap)=>{
+      if (snap.val() === true){
+        this.connected = true;
+        this.meRef.onDisconnect().remove();   // (re)arm cleanup after every (re)connect
+        writePresence();
+        this.setStatus(true, "connected 💞");
+      } else {
+        this.connected = false;
+        this.setStatus(false, "connecting…");
       }
     });
-    this.peer.on("disconnected", ()=>{
-      if (this.dead) return;
-      try { this.peer.reconnect(); } catch(e){}
-    });
-  },
-  // Destroy the current peer and rebuild it after a short backoff. This is what
-  // breaks the post-refresh "reconnecting…" deadlock: once the broker releases
-  // the old ID, the rebuilt peer claims it cleanly and connects.
-  scheduleRecreate(){
-    if (this.dead || this.recreateTimer) return;
-    const delay = Math.min(1000 + this.tries*900, 5000);
-    this.tries++;
-    this.recreateTimer = setTimeout(()=>{
-      this.recreateTimer = null;
-      clearInterval(this.retry);
-      try { if (this.peer) this.peer.destroy(); } catch(e){}
-      this.peer = null;
-      if (!this.dead) this.createPeer();
-    }, delay);
-  },
-  tryConnect(otherId){
-    if (this.connected || !this.peer) return;
-    try{
-      const c = this.peer.connect(otherId, { reliable:false, serialization:"json" });
-      if (c) this.bind(c, true);
-    }catch(e){}
-  },
-  bind(c, outgoing){
-    c.on("open", ()=>{
-      // prefer a single connection
-      if (this.connected && this.conn && this.conn !== c){ try{c.close();}catch(e){} return; }
-      this.conn = c; this.connected = true;
-      clearInterval(this.retry);
-      clearTimeout(this.recreateTimer); this.recreateTimer = null; this.tries = 0;
-      this.setStatus(true,"connected 💞");
-      sysMsg(`${CONFIG.NAMES[ME.other]} is here! Say hi 👋`);
-      // send a hello with our position
-      this.send({ t:"hello" });
-    });
-    c.on("data", (d)=> this.onData(d));
-    c.on("close", ()=>{
-      if (this.dead) return;
-      if (this.conn === c){ this.connected=false; this.conn=null;
-        this.setStatus(false,"partner left…");
-        sysMsg(`${CONFIG.NAMES[ME.other]} disconnected.`);
-        const otherId = `${CONFIG.ROOM}-${ME.other}`;
-        clearInterval(this.retry);
-        this.retry = setInterval(()=>{ if(!this.connected) this.tryConnect(otherId); }, 4000);
+
+    // ---- Partner movement + presence ----
+    this.otherRef.on("value", (snap)=>{
+      const d = snap.val();
+      const oc = characters[ME.other];
+      if (d && d.active){
+        if (typeof d.x === "number" && typeof d.z === "number") oc.userData.target.set(d.x, 0, d.z);
+        if (typeof d.r === "number") oc.userData.netRot = d.r;
+        oc.visible = true;
+        if (!oc.userData.present){
+          oc.userData.present = true;
+          sysMsg(`${CONFIG.NAMES[ME.other]} is here! Say hi 👋`);
+        }
+      } else {
+        if (oc.userData.present){
+          oc.userData.present = false;
+          sysMsg(`${CONFIG.NAMES[ME.other]} disconnected.`);
+        }
+        oc.visible = false;
       }
     });
-    c.on("error", ()=>{});
+
+    // ---- Chat: child-pushed messages ----
+    // A short grace window suppresses speech-bubbles/sfx for replayed history,
+    // while still listing recent messages in the feed.
+    setTimeout(()=>{ this.joinReady = true; }, 1500);
+    this.chatsRef.limitToLast(40).on("child_added", (snap)=>{
+      const d = snap.val();
+      if (!d || !d.m) return;
+      const live = this.joinReady;
+      if (d.who === ME.who){
+        if (!live) addChat(d.who, d.m);   // restore my own history on reload (live ones already echoed)
+        return;
+      }
+      addChat(d.who, d.m);
+      if (live){ showBubble(d.who, d.m); Audio_.pop(); notifyChat(); }
+    });
+
+    // ---- Shared world state: cake candles + portal ----
+    this.candlesRef.on("value", (snap)=>{
+      const v = snap.val();
+      if (v && typeof v.lit === "boolean") setCandles(v.lit);
+    });
+    this.portalRef.on("value", (snap)=>{
+      if (snap.val() === true) unlockPortal(true);
+    });
   },
-  onData(d){
-    if (!d || !d.t) return;
-    if (d.t==="pos"){
-      const ch = characters[ME.other];
-      ch.userData.target.set(d.x, 0, d.z);
-      ch.userData.netRot = d.r;
-    } else if (d.t==="chat"){
-      addChat(ME.other, d.m);
-      showBubble(ME.other, d.m);
-      Audio_.pop();
-    } else if (d.t==="hello"){
-      // reply so both see each other immediately
-      this.send({ t:"pos", x:characters[ME.who].position.x, z:characters[ME.who].position.z, r:characters[ME.who].rotation.y });
-    } else if (d.t==="candles"){
-      setCandles(d.lit);
-    } else if (d.t==="portal"){
-      unlockPortal(true);
-    }
+
+  // Throttled movement write (called from the animation loop).
+  sendPos(me){
+    if (!this.meRef) return;
+    this.meRef.update({
+      x: +me.position.x.toFixed(2),
+      z: +me.position.z.toFixed(2),
+      r: +me.rotation.y.toFixed(2),
+      active: true,
+      ts: firebase.database.ServerValue.TIMESTAMP
+    });
   },
-  send(obj){ if (this.connected && this.conn){ try{ this.conn.send(obj); }catch(e){} } },
+  sendChat(text){
+    if (!this.chatsRef) return;
+    this.chatsRef.push({ who: ME.who, m: text, ts: firebase.database.ServerValue.TIMESTAMP });
+  },
+  setCandles(lit){
+    if (this.candlesRef) this.candlesRef.set({ lit, by: ME.who, ts: firebase.database.ServerValue.TIMESTAMP });
+  },
+  openPortal(){
+    if (this.portalRef) this.portalRef.set(true);
+  },
   setStatus(on, text){
     const cls = "dot " + (on ? "on" : "off");
     $("conn-dot").className = cls;
     const fd = $("fab-dot"); if (fd) fd.className = cls;   // mirror onto launcher
     $("conn-text").textContent = text;
   },
-  // Release our PeerJS ID + close the connection before the tab goes away so a
-  // reload doesn't collide with the stale session (the root cause of the
-  // sticky "reconnecting…" loop after a refresh).
+  // Explicit cleanup so a refresh/close removes our presence immediately
+  // (onDisconnect already covers ungraceful drops; this fires on graceful exit).
   cleanup(){
-    this.dead = true;
-    clearInterval(this.retry);
-    clearTimeout(this.recreateTimer);
-    try { if (this.conn) this.conn.close(); } catch(e){}
-    try { if (this.peer) this.peer.destroy(); } catch(e){}   // frees the ID on the broker
-    this.peer = null; this.conn = null; this.connected = false;
+    try { if (this.meRef){ this.meRef.onDisconnect().cancel(); this.meRef.remove(); } } catch(e){}
   }
 };
 
-// Cleanly drop the session on refresh/close -> next load connects fresh & green.
+// Remove our presence node on graceful unload -> next load starts fresh & green.
 window.addEventListener("beforeunload", ()=>{ try { Net.cleanup(); } catch(e){} });
 window.addEventListener("pagehide",     ()=>{ try { Net.cleanup(); } catch(e){} });
-
-// Local fallback channel so two tabs on the SAME machine can also play/test.
-let bc = null;
-try {
-  bc = new BroadcastChannel("ansu-saya-love-world");
-  bc.onmessage = (ev)=>{
-    const d = ev.data;
-    if (!d || d.from === ME.who) return;            // ignore our own
-    if (!ME.who) return;
-    if (d.t==="pos" && d.from===ME.other){
-      characters[ME.other].userData.target.set(d.x,0,d.z);
-      characters[ME.other].userData.netRot = d.r;
-      if (!Net.connected) Net.setStatus(true,"connected (local) 💞");
-    } else if (d.t==="chat" && d.from===ME.other){
-      addChat(ME.other, d.m); showBubble(ME.other, d.m); Audio_.pop();
-    } else if (d.t==="candles"){ setCandles(d.lit); }
-    else if (d.t==="portal"){ unlockPortal(true); }
-  };
-} catch(e){}
-
-function netBroadcast(obj){
-  Net.send(obj);
-  if (bc){ try{ bc.postMessage(Object.assign({ from:ME.who }, obj)); }catch(e){} }
-}
 
 /* =====================================================================
    7. CHAT UI
@@ -1023,7 +1010,7 @@ $("chat-form").addEventListener("submit", (e)=>{
   addChat(ME.who, text);
   showBubble(ME.who, text);
   Audio_.pop();
-  netBroadcast({ t:"chat", m:text });
+  Net.sendChat(text);
 });
 
 /* ---- Mobile chat: minimize / expand ---- */
@@ -1063,16 +1050,16 @@ function setCandles(lit){
 }
 function blowCandles(){
   if (!candlesLit) { // relight playfully
-    setCandles(true); netBroadcast({ t:"candles", lit:true });
+    setCandles(true); Net.setCandles(true);
     showBubble(ME.who, "Re-lit! 🔥 wish again?"); return;
   }
   setCandles(false);
-  netBroadcast({ t:"candles", lit:false });
+  Net.setCandles(false);
   Audio_.pop();
   // pop puff particles at cake
   burstHeartsAtWorld(cake.position.clone().add(new THREE.Vector3(0,3,0)), "💨", 10);
   showBubble(ME.who, "Make a wish! 🎂✨");
-  setTimeout(()=>{ if(!candlesLit){ setCandles(true); netBroadcast({t:"candles",lit:true}); } }, 9000);
+  setTimeout(()=>{ if(!candlesLit){ setCandles(true); Net.setCandles(true); } }, 9000);
 }
 
 function unlockPortal(fromNet){
@@ -1080,7 +1067,7 @@ function unlockPortal(fromNet){
   WORLD.portalUnlocked = true;
   sysMsg("The portal slides open… welcome to our gallery 💖");
   Audio_.switchToApocalypse();      // romantic BGM -> "Apocalypse" (loops on)
-  if (!fromNet) netBroadcast({ t:"portal" });
+  if (!fromNet) Net.openPortal();
   // animate door sliding up
   const door = portal.door; const startY = door.position.y; const endY = startY + 9.5;
   const t0 = performance.now();
@@ -1293,10 +1280,11 @@ function animate(){
     }
     me.userData.moving = moving;
 
-    // throttle network position broadcast
-    if (me.position.distanceTo(lastPos) > 0.05){
+    // throttle network position writes (~12/sec, only while actually moving)
+    if (me.position.distanceTo(lastPos) > 0.05 && (t - lastNetSent) > 0.08){
       lastPos.copy(me.position);
-      netBroadcast({ t:"pos", x:+me.position.x.toFixed(2), z:+me.position.z.toFixed(2), r:+me.rotation.y.toFixed(2) });
+      lastNetSent = t;
+      Net.sendPos(me);
     }
 
     // camera follow + drag-orbit (yaw/pitch come from CAM, set by dragging)
@@ -1359,7 +1347,7 @@ function animate(){
     const proj = _tmpV.clone().project(camera);
     const sx = (proj.x*0.5+0.5)*window.innerWidth;
     const sy = (-proj.y*0.5+0.5)*window.innerHeight;
-    const visible = proj.z < 1;
+    const visible = proj.z < 1 && ch.visible;   // hide tag if partner left (ch.visible=false)
     const tag = tags[key];
     tag.style.display = visible ? "block" : "none";
     tag.style.left = sx+"px"; tag.style.top = sy+"px";
