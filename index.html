@@ -1,0 +1,1207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Ansu &amp; Sayantani — Our Little Love World 💖</title>
+
+<!--
+  =====================================================================
+  ANSU & SAYANTANI : OUR LITTLE LOVE WORLD
+  A single-file 3D web game gift built with Three.js + PeerJS.
+  Features: auto background music + mute, click boing/pop + heart bursts,
+  real-time 2-player chat & movement sync, wobbly penguin characters,
+  candle-blowing cake, and a password portal to a photo gallery.
+
+  Music: "Fluffing a Duck" / "Monkeys Spinning Monkeys" by Kevin MacLeod
+  (incompetech.com) — Licensed under Creative Commons: By Attribution 4.0.
+  =====================================================================
+-->
+
+<style>
+  :root{
+    --pink:#ff4d8d;
+    --pink-soft:#ff86b3;
+    --glass:rgba(255,255,255,0.16);
+    --glass-strong:rgba(255,255,255,0.28);
+    --shadow:0 8px 30px rgba(0,0,0,0.25);
+    --font:'Trebuchet MS','Segoe UI',system-ui,-apple-system,sans-serif;
+  }
+
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    overflow:hidden; background:#87ceeb;
+    font-family:var(--font);
+    touch-action:none;
+  }
+
+  #scene-canvas{ display:block; position:fixed; inset:0; z-index:1; }
+
+  /* ---------- Generic glassy panel ---------- */
+  .glass{
+    background:var(--glass);
+    backdrop-filter:blur(10px) saturate(160%);
+    -webkit-backdrop-filter:blur(10px) saturate(160%);
+    border:1px solid rgba(255,255,255,0.35);
+    box-shadow:var(--shadow);
+  }
+
+  /* ---------- Loading / Selection modal ---------- */
+  #overlay{
+    position:fixed; inset:0; z-index:50;
+    display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(circle at 50% 30%, #ffd1e6 0%, #ff9ec4 45%, #ff6fae 100%);
+    text-align:center; padding:20px;
+  }
+  #overlay .card{
+    border-radius:28px; padding:34px 28px; max-width:440px; width:100%;
+    background:rgba(255,255,255,0.85);
+    box-shadow:0 20px 60px rgba(214,51,108,0.45);
+    animation:pop .5s cubic-bezier(.17,.89,.32,1.49);
+  }
+  @keyframes pop{ 0%{transform:scale(.6);opacity:0} 100%{transform:scale(1);opacity:1} }
+  #overlay h1{
+    margin:0 0 6px; font-size:30px; color:#e23b78;
+    text-shadow:0 2px 0 #fff;
+  }
+  #overlay p{ margin:6px 0 22px; color:#7a3357; font-size:15px; line-height:1.45; }
+  .pick-row{ display:flex; gap:16px; justify-content:center; flex-wrap:wrap; }
+  .pick{
+    cursor:pointer; border:none; border-radius:22px; padding:18px 10px; width:140px;
+    color:#fff; font-size:19px; font-weight:bold; font-family:var(--font);
+    transition:transform .15s ease, box-shadow .15s ease;
+    box-shadow:0 8px 20px rgba(0,0,0,0.2);
+  }
+  .pick .emoji{ display:block; font-size:38px; margin-bottom:6px; }
+  .pick.ansu{ background:linear-gradient(160deg,#4facfe,#2f7bff); }
+  .pick.saya{ background:linear-gradient(160deg,#ff7eb3,#ff4d8d); }
+  .pick:hover{ transform:translateY(-4px) scale(1.04); }
+  .pick:active{ transform:scale(.96); }
+  #overlay .hint{ margin-top:18px; font-size:12px; color:#9b5278; }
+
+  /* ---------- Top bar controls ---------- */
+  .top-right{
+    position:fixed; top:12px; right:12px; z-index:30;
+    display:flex; gap:8px; align-items:center;
+  }
+  .icon-btn{
+    cursor:pointer; border:none; border-radius:16px; padding:10px 14px;
+    color:#fff; font-size:15px; font-weight:bold; font-family:var(--font);
+    background:var(--glass-strong); backdrop-filter:blur(8px);
+    border:1px solid rgba(255,255,255,0.4);
+    box-shadow:var(--shadow); transition:transform .12s ease, background .2s;
+    display:flex; align-items:center; gap:6px;
+  }
+  .icon-btn:hover{ transform:translateY(-2px); }
+  .icon-btn:active{ transform:scale(.94); }
+
+  /* ---------- Title badge ---------- */
+  #title-badge{
+    position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:25;
+    border-radius:18px; padding:8px 18px; color:#fff; font-weight:bold;
+    font-size:15px; text-shadow:0 1px 3px rgba(0,0,0,.3);
+    pointer-events:none; white-space:nowrap;
+  }
+
+  /* ---------- Chat box ---------- */
+  #chat{
+    position:fixed; left:12px; bottom:12px; z-index:30;
+    width:320px; max-width:calc(100vw - 24px);
+    border-radius:20px; overflow:hidden; display:flex; flex-direction:column;
+  }
+  #chat-head{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:8px 12px; color:#fff; font-weight:bold; font-size:13px;
+    background:rgba(226,59,120,0.55);
+  }
+  #chat-status{ font-size:11px; font-weight:normal; opacity:.95; display:flex; align-items:center; gap:5px; }
+  .dot{ width:9px; height:9px; border-radius:50%; background:#ffd23f; box-shadow:0 0 6px #ffd23f; }
+  .dot.on{ background:#4ade80; box-shadow:0 0 8px #4ade80; }
+  .dot.off{ background:#ff5a5a; box-shadow:0 0 8px #ff5a5a; }
+  #chat-feed{
+    height:160px; overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column; gap:7px;
+    color:#fff; font-size:13.5px; scrollbar-width:thin;
+  }
+  #chat-feed::-webkit-scrollbar{ width:6px; }
+  #chat-feed::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.5); border-radius:3px; }
+  .msg{ line-height:1.35; word-wrap:break-word; animation:slidein .25s ease; }
+  @keyframes slidein{ from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+  .msg .who{ font-weight:bold; margin-right:5px; }
+  .msg.system{ font-style:italic; opacity:.85; font-size:12px; }
+  .msg.ansu .who{ color:#aee0ff; }
+  .msg.saya .who{ color:#ffc6e0; }
+  #chat-form{ display:flex; gap:6px; padding:8px; background:rgba(255,255,255,0.12); }
+  #chat-input{
+    flex:1; border:none; outline:none; border-radius:12px; padding:11px 13px;
+    font-size:15px; font-family:var(--font); background:rgba(255,255,255,0.9); color:#333;
+  }
+  #chat-send{
+    border:none; border-radius:12px; padding:0 16px; cursor:pointer; color:#fff;
+    font-weight:bold; font-size:16px; background:linear-gradient(160deg,#ff7eb3,#ff4d8d);
+  }
+  #chat-send:active{ transform:scale(.93); }
+
+  /* ---------- Floating UI: nametags & speech bubbles ---------- */
+  #world-ui{ position:fixed; inset:0; z-index:20; pointer-events:none; overflow:hidden; }
+  .nametag{
+    position:absolute; transform:translate(-50%,-50%);
+    background:rgba(0,0,0,0.45); color:#fff; padding:2px 9px; border-radius:10px;
+    font-size:12px; font-weight:bold; white-space:nowrap; transition:opacity .2s;
+  }
+  .bubble{
+    position:absolute; transform:translate(-50%,-100%);
+    background:#fff; color:#333; padding:9px 13px; border-radius:16px;
+    font-size:14px; font-weight:bold; max-width:200px; text-align:center;
+    box-shadow:0 6px 18px rgba(0,0,0,0.25);
+    animation:bubblepop .3s cubic-bezier(.17,.89,.32,1.49);
+  }
+  .bubble:after{
+    content:''; position:absolute; left:50%; bottom:-9px; transform:translateX(-50%);
+    border-left:9px solid transparent; border-right:9px solid transparent; border-top:10px solid #fff;
+  }
+  @keyframes bubblepop{ 0%{transform:translate(-50%,-100%) scale(.4);opacity:0} 100%{transform:translate(-50%,-100%) scale(1);opacity:1} }
+
+  /* ---------- Interaction prompt ---------- */
+  #prompt{
+    position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:28;
+    padding:12px 20px; border-radius:16px; color:#fff; font-weight:bold; font-size:15px;
+    display:none; text-align:center; animation:bob 1.2s ease-in-out infinite;
+  }
+  @keyframes bob{ 0%,100%{transform:translateX(-50%) translateY(0)} 50%{transform:translateX(-50%) translateY(-6px)} }
+
+  /* ---------- Password modal ---------- */
+  #pass-modal{
+    position:fixed; inset:0; z-index:45; display:none;
+    align-items:center; justify-content:center; background:rgba(40,8,28,0.55);
+    backdrop-filter:blur(4px); padding:20px;
+  }
+  #pass-modal .card{
+    border-radius:24px; padding:28px 26px; max-width:360px; width:100%; text-align:center;
+    background:rgba(255,255,255,0.92); box-shadow:0 18px 50px rgba(0,0,0,0.4);
+  }
+  #pass-modal h2{ margin:0 0 4px; color:#e23b78; }
+  #pass-modal p{ margin:4px 0 18px; color:#7a3357; font-size:14px; }
+  #pass-input{
+    width:100%; border:2px solid #ffb3d1; border-radius:14px; padding:12px 14px;
+    font-size:18px; text-align:center; outline:none; font-family:var(--font); letter-spacing:2px;
+  }
+  #pass-input:focus{ border-color:var(--pink); }
+  #pass-row{ display:flex; gap:10px; margin-top:16px; }
+  #pass-row button{ flex:1; border:none; border-radius:14px; padding:12px; cursor:pointer; font-weight:bold; font-size:15px; color:#fff; }
+  #pass-ok{ background:linear-gradient(160deg,#ff7eb3,#ff4d8d); }
+  #pass-cancel{ background:#b9a3ad; }
+  #pass-err{ color:#e23b78; font-size:13px; height:16px; margin-top:8px; font-weight:bold; }
+
+  /* ---------- Mobile joystick ---------- */
+  #joystick{
+    position:fixed; right:24px; bottom:24px; z-index:30;
+    width:120px; height:120px; border-radius:50%;
+    background:rgba(255,255,255,0.18); border:2px solid rgba(255,255,255,0.4);
+    display:none; touch-action:none;
+  }
+  #stick{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:54px; height:54px; border-radius:50%;
+    background:rgba(255,255,255,0.7); box-shadow:0 4px 12px rgba(0,0,0,.25);
+  }
+
+  /* ---------- Heart particle ---------- */
+  .heart-particle{
+    position:fixed; z-index:40; pointer-events:none; font-size:22px;
+    will-change:transform,opacity; user-select:none;
+  }
+
+  /* ---------- Help hint ---------- */
+  #help{
+    position:fixed; left:12px; top:12px; z-index:25;
+    border-radius:14px; padding:8px 12px; color:#fff; font-size:12px; line-height:1.5;
+    max-width:230px; transition:opacity .4s;
+  }
+  #help b{ color:#ffe; }
+
+  @media (max-width:640px){
+    #help{ display:none; }
+    #title-badge{ font-size:12px; padding:6px 12px; }
+    #chat{ width:260px; }
+    #chat-feed{ height:120px; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="scene-canvas"></canvas>
+
+<!-- Floating 3D-anchored UI (nametags + speech bubbles) -->
+<div id="world-ui"></div>
+
+<!-- Title -->
+<div id="title-badge" class="glass">💖 Our Little Love World 💖</div>
+
+<!-- Help -->
+<div id="help" class="glass">
+  <b>Move:</b> WASD / Arrows<br/>
+  <b>Interact:</b> E (or tap prompt)<br/>
+  <b>Click anywhere</b> for hearts!<br/>
+  Find the glowing 💜 portal…
+</div>
+
+<!-- Top-right controls -->
+<div class="top-right">
+  <button id="mute-btn" class="icon-btn" title="Toggle music">🔊 <span id="mute-label">Music</span></button>
+</div>
+
+<!-- Chat -->
+<div id="chat" class="glass">
+  <div id="chat-head">
+    <span>💌 Love Chat</span>
+    <span id="chat-status"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></span>
+  </div>
+  <div id="chat-feed"></div>
+  <form id="chat-form" autocomplete="off">
+    <input id="chat-input" type="text" placeholder="Say something cute…" maxlength="140" />
+    <button id="chat-send" type="submit">➤</button>
+  </form>
+</div>
+
+<!-- Interaction prompt -->
+<div id="prompt" class="glass"></div>
+
+<!-- Mobile joystick -->
+<div id="joystick"><div id="stick"></div></div>
+
+<!-- Password modal -->
+<div id="pass-modal">
+  <div class="card">
+    <h2>🔒 Secret Portal</h2>
+    <p>Whisper the magic word to open the gallery of us…</p>
+    <input id="pass-input" type="text" placeholder="password" autocomplete="off" />
+    <div id="pass-err"></div>
+    <div id="pass-row">
+      <button id="pass-cancel">Cancel</button>
+      <button id="pass-ok">Open 💖</button>
+    </div>
+  </div>
+</div>
+
+<!-- Selection / loading overlay -->
+<div id="overlay">
+  <div class="card">
+    <h1>Our Little Love World</h1>
+    <p>A tiny universe made just for us 💞<br/>Who is playing right now?</p>
+    <div class="pick-row">
+      <button class="pick ansu" data-who="ansu"><span class="emoji">🧑</span>Ansu</button>
+      <button class="pick saya" data-who="saya"><span class="emoji">👩</span>Sayantani</button>
+    </div>
+    <div class="hint">Tip: open this on two devices (one each) to play together live!</div>
+  </div>
+</div>
+
+<!-- Libraries (loaded by the player's browser) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
+<script>
+"use strict";
+/* =====================================================================
+   0. GLOBAL CONFIG
+   ===================================================================== */
+const CONFIG = {
+  // Deterministic shared room so the two of you always find each other.
+  // Change ROOM if you ever want a fresh private room.
+  ROOM: "ansu-sayantani-love-world-v1",
+  MUSIC_URLS: [
+    "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Fluffing%20a%20Duck.mp3",
+    "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Monkeys%20Spinning%20Monkeys.mp3",
+    "https://incompetech.com/music/royalty-free/mp3-royaltyfree/The%20Builder.mp3"
+  ],
+  PORTAL_PASSWORD: "babe",
+  FACE: { ansu: "./assets/ansu_face.png", saya: "./assets/sayantani_face.png" },
+  NAMES: { ansu: "Ansu", saya: "Sayantani" }
+};
+
+// Shorthand DOM helper
+const $ = (id) => document.getElementById(id);
+
+/* =====================================================================
+   1. AUDIO  (background music + synth click SFX)
+   ===================================================================== */
+const Audio_ = {
+  el: null, muted: false, started: false, ctx: null,
+  init(){
+    const a = new Audio();
+    a.loop = true; a.preload = "auto"; a.crossOrigin = "anonymous"; a.volume = 0;
+    let idx = 0;
+    a.src = CONFIG.MUSIC_URLS[idx];
+    a.addEventListener("error", () => {
+      idx++;
+      if (idx < CONFIG.MUSIC_URLS.length){ a.src = CONFIG.MUSIC_URLS[idx]; a.play().catch(()=>{}); }
+    });
+    this.el = a;
+  },
+  // Called from a user gesture (character selection) to satisfy autoplay rules.
+  start(){
+    if (this.started) return;
+    this.started = true;
+    try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){}
+    const a = this.el;
+    a.play().then(()=>this.fadeTo(this.muted?0:0.45)).catch(()=>{
+      // Autoplay still blocked? retry on next interaction.
+      const retry = ()=>{ a.play().then(()=>this.fadeTo(this.muted?0:0.45)).catch(()=>{}); window.removeEventListener("pointerdown",retry); };
+      window.addEventListener("pointerdown", retry);
+    });
+  },
+  fadeTo(target){
+    const a = this.el; if(!a) return;
+    const step = (target - a.volume) / 20;
+    let i = 0;
+    const tick = ()=>{ i++; a.volume = Math.max(0, Math.min(1, a.volume + step));
+      if (i < 20) requestAnimationFrame(tick); else a.volume = target; };
+    requestAnimationFrame(tick);
+  },
+  toggleMute(){
+    this.muted = !this.muted;
+    this.fadeTo(this.muted ? 0 : 0.45);
+    $("mute-btn").firstChild.nodeValue = this.muted ? "🔇 " : "🔊 ";
+    $("mute-label").textContent = this.muted ? "Muted" : "Music";
+  },
+  // Synthesized funny "boing"
+  boing(){
+    const ctx = this.ctx; if(!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator(); const g = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(700, t);
+    osc.frequency.exponentialRampToValueAtTime(120, t + 0.18);
+    // little wobble for goofiness
+    const lfo = ctx.createOscillator(); const lfoG = ctx.createGain();
+    lfo.frequency.value = 22; lfoG.gain.value = 40;
+    lfo.connect(lfoG); lfoG.connect(osc.frequency);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.5, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    osc.connect(g); g.connect(ctx.destination);
+    osc.start(t); lfo.start(t); osc.stop(t + 0.36); lfo.stop(t + 0.36);
+  },
+  // Synthesized "pop"
+  pop(){
+    const ctx = this.ctx; if(!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator(); const g = ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(180, t);
+    osc.frequency.exponentialRampToValueAtTime(900, t + 0.08);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.4, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    osc.connect(g); g.connect(ctx.destination);
+    osc.start(t); osc.stop(t + 0.2);
+  }
+};
+Audio_.init();
+$("mute-btn").addEventListener("click", (e)=>{ e.stopPropagation(); Audio_.toggleMute(); });
+
+/* =====================================================================
+   2. THREE.JS ENGINE SETUP
+   ===================================================================== */
+const canvas = $("scene-canvas");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x9fdcff, 60, 150);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth/window.innerHeight, 0.1, 500);
+camera.position.set(0, 9, 16);
+
+// Lights
+const hemi = new THREE.HemisphereLight(0xfff4ff, 0x9bd07a, 0.95);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+sun.position.set(20, 40, 18);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -70; sun.shadow.camera.right = 70;
+sun.shadow.camera.top = 70; sun.shadow.camera.bottom = -70;
+sun.shadow.camera.far = 140;
+scene.add(sun);
+
+window.addEventListener("resize", ()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* =====================================================================
+   3. WORLD BUILDING
+   ===================================================================== */
+const WORLD = { bound: 46, portalUnlocked:false };
+
+// ---- Ground (garden) ----
+(function ground(){
+  const geo = new THREE.PlaneGeometry(120, 120, 1, 1);
+  const mat = new THREE.MeshStandardMaterial({ color:0x76c043, roughness:1 });
+  const m = new THREE.Mesh(geo, mat);
+  m.rotation.x = -Math.PI/2; m.receiveShadow = true;
+  scene.add(m);
+  // a soft pink path circle
+  const path = new THREE.Mesh(
+    new THREE.RingGeometry(0, 10, 40),
+    new THREE.MeshStandardMaterial({ color:0xffd9e8, roughness:1 })
+  );
+  path.rotation.x = -Math.PI/2; path.position.y = 0.02; path.receiveShadow = true;
+  scene.add(path);
+})();
+
+// ---- Giant pulsing heart ----
+let heartMesh;
+(function heart(){
+  const s = new THREE.Shape();
+  const x=0, y=0;
+  s.moveTo(x+0.5, y+0.5);
+  s.bezierCurveTo(x+0.5,y+0.5, x+0.4,y, x,y);
+  s.bezierCurveTo(x-0.6,y, x-0.6,y+0.7, x-0.6,y+0.7);
+  s.bezierCurveTo(x-0.6,y+1.1, x-0.3,y+1.54, x+0.5,y+1.9);
+  s.bezierCurveTo(x+1.3,y+1.54, x+1.6,y+1.1, x+1.6,y+0.7);
+  s.bezierCurveTo(x+1.6,y+0.7, x+1.6,y, x+1.0,y);
+  s.bezierCurveTo(x+0.7,y, x+0.5,y+0.5, x+0.5,y+0.5);
+  const geo = new THREE.ExtrudeGeometry(s, { depth:0.8, bevelEnabled:true, bevelThickness:0.25, bevelSize:0.25, bevelSegments:4 });
+  geo.center();
+  const mat = new THREE.MeshStandardMaterial({ color:0xff2d6f, roughness:0.25, metalness:0.1, emissive:0x55001a });
+  heartMesh = new THREE.Mesh(geo, mat);
+  heartMesh.scale.set(4,4,4);
+  heartMesh.rotation.z = Math.PI;       // point downward correctly
+  heartMesh.position.set(0, 11, -10);
+  heartMesh.castShadow = true;
+  scene.add(heartMesh);
+})();
+
+// ---- Flowers (scattered) ----
+function makeFlower(color){
+  const g = new THREE.Group();
+  const stem = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06,0.06,1.1,6),
+    new THREE.MeshStandardMaterial({ color:0x3aa14a })
+  );
+  stem.position.y = 0.55; stem.castShadow = true; g.add(stem);
+  const center = new THREE.Mesh(
+    new THREE.SphereGeometry(0.18,10,10),
+    new THREE.MeshStandardMaterial({ color:0xffd23f })
+  );
+  center.position.y = 1.15; g.add(center);
+  for (let i=0;i<6;i++){
+    const p = new THREE.Mesh(
+      new THREE.SphereGeometry(0.16,8,8),
+      new THREE.MeshStandardMaterial({ color })
+    );
+    const a = (i/6)*Math.PI*2;
+    p.position.set(Math.cos(a)*0.28, 1.15, Math.sin(a)*0.28);
+    p.scale.set(1,0.6,1); g.add(p);
+  }
+  return g;
+}
+const flowerColors = [0xff5a8a,0xff8fc1,0x9b5de5,0x00bbf9,0xfee440,0xff6b6b];
+for (let i=0;i<60;i++){
+  const f = makeFlower(flowerColors[i % flowerColors.length]);
+  let fx, fz;
+  do { fx = (Math.random()*2-1)*WORLD.bound; fz = (Math.random()*2-1)*WORLD.bound; }
+  while (Math.hypot(fx, fz) < 9 || fz < -26);   // keep path & portal area clear
+  f.position.set(fx, 0, fz);
+  const sc = 0.7 + Math.random()*0.9; f.scale.setScalar(sc);
+  f.userData.sway = Math.random()*Math.PI*2;
+  scene.add(f);
+  WORLD_FLOWERS_PUSH(f);
+}
+function WORLD_FLOWERS_PUSH(f){ (WORLD.flowers = WORLD.flowers || []).push(f); }
+
+// ---- Birthday Cake (with candles) ----
+const cake = new THREE.Group();
+let candleFlames = [];
+let candlesLit = true;
+(function buildCake(){
+  const tierMat1 = new THREE.MeshStandardMaterial({ color:0xfff0f5, roughness:0.7 });
+  const tierMat2 = new THREE.MeshStandardMaterial({ color:0xffc4dd, roughness:0.7 });
+  const t1 = new THREE.Mesh(new THREE.CylinderGeometry(1.6,1.6,0.9,32), tierMat1);
+  t1.position.y = 0.45; t1.castShadow = true; cake.add(t1);
+  const t2 = new THREE.Mesh(new THREE.CylinderGeometry(1.1,1.1,0.8,32), tierMat2);
+  t2.position.y = 1.25; t2.castShadow = true; cake.add(t2);
+  const t3 = new THREE.Mesh(new THREE.CylinderGeometry(0.65,0.65,0.7,32), tierMat1);
+  t3.position.y = 1.95; t3.castShadow = true; cake.add(t3);
+  // cherries on top edge
+  for (let i=0;i<8;i++){
+    const a=(i/8)*Math.PI*2;
+    const ch=new THREE.Mesh(new THREE.SphereGeometry(0.1,8,8), new THREE.MeshStandardMaterial({color:0xff2d55}));
+    ch.position.set(Math.cos(a)*1.5,0.95,Math.sin(a)*1.5); cake.add(ch);
+  }
+  // candles
+  for (let i=0;i<5;i++){
+    const a=(i/5)*Math.PI*2;
+    const cx=Math.cos(a)*0.35, cz=Math.sin(a)*0.35;
+    const candle=new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,0.5,8),
+      new THREE.MeshStandardMaterial({color:[0xff6b6b,0x4facfe,0xfee440,0x9b5de5,0x00f5d4][i]}));
+    candle.position.set(cx,2.55,cz); cake.add(candle);
+    const flame=new THREE.Mesh(new THREE.ConeGeometry(0.08,0.22,8),
+      new THREE.MeshStandardMaterial({color:0xffd23f, emissive:0xff8800, emissiveIntensity:2}));
+    flame.position.set(cx,2.9,cz); cake.add(flame); candleFlames.push(flame);
+  }
+  cake.position.set(14, 0, 6);
+  scene.add(cake);
+})();
+
+// ---- Portal wall + gallery room ----
+const portal = { group:new THREE.Group(), door:null, z:-30 };
+(function buildPortal(){
+  // Back wall row with a glowing archway/door in the middle
+  const wallMat = new THREE.MeshStandardMaterial({ color:0x6a4c93, roughness:0.8 });
+  const leftWall = new THREE.Mesh(new THREE.BoxGeometry(34, 9, 1.2), wallMat);
+  leftWall.position.set(-22, 4.5, portal.z); leftWall.castShadow=true; leftWall.receiveShadow=true;
+  const rightWall = leftWall.clone(); rightWall.position.set(22, 4.5, portal.z);
+  portal.group.add(leftWall, rightWall);
+  // top lintel above door
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(11, 2.5, 1.2), wallMat);
+  lintel.position.set(0, 7.75, portal.z); lintel.castShadow=true;
+  portal.group.add(lintel);
+  // glowing frame
+  const frameMat = new THREE.MeshStandardMaterial({ color:0xff4dff, emissive:0xb000b0, emissiveIntensity:1.4 });
+  const frame = new THREE.Mesh(new THREE.TorusGeometry(3.2, 0.25, 12, 40), frameMat);
+  frame.position.set(0, 4.6, portal.z+0.05);
+  portal.group.add(frame);
+  // sliding door
+  const doorMat = new THREE.MeshStandardMaterial({ color:0x2a1b3d, emissive:0x4b0082, emissiveIntensity:0.6, roughness:0.4 });
+  const door = new THREE.Mesh(new THREE.BoxGeometry(9.4, 9, 0.8), doorMat);
+  door.position.set(0, 4.5, portal.z); door.castShadow=true;
+  portal.door = door; portal.group.add(door);
+  // lock sign
+  scene.add(portal.group);
+
+  // ---- Gallery room behind the wall ----
+  const room = new THREE.Group();
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(34, 22),
+    new THREE.MeshStandardMaterial({ color:0x3a2a4d }));
+  floor.rotation.x=-Math.PI/2; floor.position.set(0,0.01,-42); floor.receiveShadow=true; room.add(floor);
+  const rMat = new THREE.MeshStandardMaterial({ color:0x553f73 });
+  const back = new THREE.Mesh(new THREE.BoxGeometry(34,12,0.8), rMat);
+  back.position.set(0,6,-53); room.add(back);
+  const sideL = new THREE.Mesh(new THREE.BoxGeometry(0.8,12,22), rMat);
+  sideL.position.set(-17,6,-42); room.add(sideL);
+  const sideR = sideL.clone(); sideR.position.set(17,6,-42); room.add(sideR);
+  // soft light inside
+  const roomLight = new THREE.PointLight(0xffd1e6, 1.2, 60); roomLight.position.set(0,9,-44); room.add(roomLight);
+  // photo frames on back wall
+  const captions = ["Our First Date 💕","That Goofy Trip ✈️","Best Smile Ever 😄","Forever You & Me ♾️","My Favorite Hello 👋","Future Us 🏡"];
+  for (let i=0;i<6;i++){
+    const col = i%3, rowi = Math.floor(i/3);
+    const fx = -10 + col*10, fy = 8 - rowi*4.5;
+    const frameM = new THREE.Mesh(new THREE.BoxGeometry(6,3.4,0.3),
+      new THREE.MeshStandardMaterial({ color:0xffd700, emissive:0x554400, emissiveIntensity:0.3 }));
+    frameM.position.set(fx, fy, -52.5); room.add(frameM);
+    const photo = new THREE.Mesh(new THREE.PlaneGeometry(5.4,2.9),
+      new THREE.MeshBasicMaterial({ map: makePhotoTexture(captions[i], i) }));
+    photo.position.set(fx, fy, -52.2); room.add(photo);
+  }
+  scene.add(room);
+})();
+
+// Canvas-drawn placeholder photo texture
+function makePhotoTexture(caption, idx){
+  const c = document.createElement("canvas"); c.width=512; c.height=288;
+  const g = c.getContext("2d");
+  const grads = [["#ff9a9e","#fad0c4"],["#a18cd1","#fbc2eb"],["#84fab0","#8fd3f4"],
+                 ["#ffecd2","#fcb69f"],["#cfd9df","#e2ebf0"],["#f6d365","#fda085"]];
+  const gr = g.createLinearGradient(0,0,512,288);
+  gr.addColorStop(0, grads[idx%grads.length][0]); gr.addColorStop(1, grads[idx%grads.length][1]);
+  g.fillStyle=gr; g.fillRect(0,0,512,288);
+  g.font="90px serif"; g.textAlign="center"; g.fillText("📷",256,150);
+  g.fillStyle="rgba(0,0,0,0.55)"; g.fillRect(0,228,512,60);
+  g.fillStyle="#fff"; g.font="bold 26px 'Trebuchet MS',sans-serif";
+  g.fillText(caption,256,268);
+  const tex = new THREE.CanvasTexture(c); tex.needsUpdate=true; return tex;
+}
+
+/* =====================================================================
+   4. CHARACTERS (wobbly penguins with face-textured box heads)
+   ===================================================================== */
+const texLoader = new THREE.TextureLoader();
+
+// Generates a cute fallback face texture if the local PNG is missing.
+function fallbackFace(who){
+  const c = document.createElement("canvas"); c.width=256; c.height=256;
+  const g = c.getContext("2d");
+  g.fillStyle = who==="ansu" ? "#cfe8ff" : "#ffd6ea"; g.fillRect(0,0,256,256);
+  // cheeks
+  g.fillStyle = who==="ansu" ? "#9ecbff" : "#ff9ec7";
+  g.beginPath(); g.arc(70,160,22,0,7); g.arc(186,160,22,0,7); g.fill();
+  // eyes
+  g.fillStyle="#3a2a2a";
+  g.beginPath(); g.arc(90,110,18,0,7); g.arc(166,110,18,0,7); g.fill();
+  g.fillStyle="#fff";
+  g.beginPath(); g.arc(96,104,6,0,7); g.arc(172,104,6,0,7); g.fill();
+  // smile
+  g.strokeStyle="#3a2a2a"; g.lineWidth=8; g.lineCap="round";
+  g.beginPath(); g.arc(128,150,42,0.15*Math.PI,0.85*Math.PI); g.stroke();
+  // name
+  g.fillStyle="#e23b78"; g.font="bold 30px 'Trebuchet MS',sans-serif"; g.textAlign="center";
+  g.fillText(CONFIG.NAMES[who], 128, 50);
+  const t = new THREE.CanvasTexture(c); t.needsUpdate=true; return t;
+}
+
+function loadFace(who){
+  const tex = texLoader.load(
+    CONFIG.FACE[who],
+    ()=>{},                        // success
+    undefined,
+    ()=>{                          // error -> swap to fallback
+      const fb = fallbackFace(who);
+      tex.image = fb.image; tex.needsUpdate = true;
+    }
+  );
+  return tex;
+}
+
+function makeCharacter(who){
+  const g = new THREE.Group();
+  const inner = new THREE.Group();    // bounces/wobbles; nametag tracks head world pos
+  g.add(inner);
+
+  const bodyColor = who==="ansu" ? 0x2f7bff : 0xff4d8d;
+  const bellyColor = 0xffffff;
+
+  // body (egg-ish)
+  const body = new THREE.Mesh(
+    new THREE.SphereGeometry(0.85, 20, 20),
+    new THREE.MeshStandardMaterial({ color:bodyColor, roughness:0.6 })
+  );
+  body.scale.set(1, 1.25, 1); body.position.y = 1.0; body.castShadow=true; inner.add(body);
+  // belly
+  const belly = new THREE.Mesh(
+    new THREE.SphereGeometry(0.6, 16, 16),
+    new THREE.MeshStandardMaterial({ color:bellyColor, roughness:0.6 })
+  );
+  belly.scale.set(1, 1.2, 0.6); belly.position.set(0, 0.95, 0.5); inner.add(belly);
+
+  // head (box) with face on +Z
+  const faceTex = loadFace(who);
+  const headMats = [
+    new THREE.MeshStandardMaterial({ color:bodyColor }),
+    new THREE.MeshStandardMaterial({ color:bodyColor }),
+    new THREE.MeshStandardMaterial({ color:bodyColor }),
+    new THREE.MeshStandardMaterial({ color:bodyColor }),
+    new THREE.MeshStandardMaterial({ map:faceTex }),        // +Z front = face
+    new THREE.MeshStandardMaterial({ color:bodyColor })
+  ];
+  const head = new THREE.Mesh(new THREE.BoxGeometry(1.05,1.05,1.05), headMats);
+  head.position.y = 2.25; head.castShadow=true; inner.add(head);
+  // little crown for the birthday vibe
+  const crown = new THREE.Mesh(new THREE.ConeGeometry(0.45,0.55,4),
+    new THREE.MeshStandardMaterial({ color:0xffd700, emissive:0x554400, emissiveIntensity:0.4 }));
+  crown.position.y = 3.0; crown.rotation.y = Math.PI/4; inner.add(crown);
+
+  // arms (flippers)
+  const armMat = new THREE.MeshStandardMaterial({ color:bodyColor });
+  const armL = new THREE.Mesh(new THREE.SphereGeometry(0.22,10,10), armMat);
+  armL.scale.set(0.5,1.1,0.4); armL.position.set(-0.9,1.05,0); inner.add(armL);
+  const armR = armL.clone(); armR.position.set(0.9,1.05,0); inner.add(armR);
+
+  // feet
+  const footMat = new THREE.MeshStandardMaterial({ color:0xffae00 });
+  const footL = new THREE.Mesh(new THREE.SphereGeometry(0.22,10,10), footMat);
+  footL.scale.set(1,0.4,1.5); footL.position.set(-0.35,0.18,0.25); inner.add(footL);
+  const footR = footL.clone(); footR.position.set(0.35,0.18,0.25); inner.add(footR);
+
+  g.userData = { inner, head, armL, armR, who,
+    target:new THREE.Vector3(), moving:false, walkPhase:Math.random()*10 };
+  scene.add(g);
+  return g;
+}
+
+const characters = {
+  ansu: makeCharacter("ansu"),
+  saya: makeCharacter("saya")
+};
+characters.ansu.position.set(-3, 0, 4);
+characters.saya.position.set(3, 0, 4);
+characters.ansu.userData.target.copy(characters.ansu.position);
+characters.saya.userData.target.copy(characters.saya.position);
+
+// nametags + bubbles DOM
+const worldUI = $("world-ui");
+function makeTag(text){ const d=document.createElement("div"); d.className="nametag"; d.textContent=text; worldUI.appendChild(d); return d; }
+const tags = { ansu:makeTag("Ansu"), saya:makeTag("Sayantani") };
+const bubbles = { ansu:null, saya:null };
+const bubbleTimers = { ansu:null, saya:null };
+
+function showBubble(who, text){
+  if (bubbles[who]) bubbles[who].remove();
+  const b = document.createElement("div"); b.className="bubble"; b.textContent=text;
+  worldUI.appendChild(b); bubbles[who]=b;
+  clearTimeout(bubbleTimers[who]);
+  bubbleTimers[who]=setTimeout(()=>{ if(bubbles[who]===b){ b.remove(); bubbles[who]=null; } }, 4000);
+}
+
+/* =====================================================================
+   5. STATE: who am I, controls
+   ===================================================================== */
+const ME = { who:null, other:null };
+const keys = {};
+const move = { x:0, z:0 };       // analog input (-1..1)
+let lastPos = new THREE.Vector3();
+
+window.addEventListener("keydown", (e)=>{
+  if (document.activeElement === $("chat-input") || document.activeElement === $("pass-input")) return;
+  keys[e.key.toLowerCase()] = true;
+  if (e.key.toLowerCase()==="e") tryInteract();
+});
+window.addEventListener("keyup", (e)=>{ keys[e.key.toLowerCase()] = false; });
+
+/* =====================================================================
+   6. NETWORKING (PeerJS — deterministic IDs, no signup needed)
+   ===================================================================== */
+const Net = {
+  peer:null, conn:null, connected:false, retry:null,
+  start(){
+    const myId  = `${CONFIG.ROOM}-${ME.who}`;
+    const otherId = `${CONFIG.ROOM}-${ME.other}`;
+    try {
+      this.peer = new Peer(myId, { debug:1 });
+    } catch(e){ this.setStatus(false,"offline"); return; }
+
+    this.peer.on("open", ()=>{
+      this.setStatus(false,"waiting for partner…");
+      this.tryConnect(otherId);
+      this.retry = setInterval(()=>{ if(!this.connected) this.tryConnect(otherId); }, 4000);
+    });
+    // someone connects to us
+    this.peer.on("connection", (c)=>{ this.bind(c); });
+    this.peer.on("error", (err)=>{
+      // "unavailable-id" => partner already took the slot OR we reloaded; "peer-unavailable" => not online yet
+      if (err && err.type === "unavailable-id"){
+        // recreate with a random suffix and connect outwards only
+        this.setStatus(false,"reconnecting…");
+      }
+    });
+    this.peer.on("disconnected", ()=>{ try{ this.peer.reconnect(); }catch(e){} });
+  },
+  tryConnect(otherId){
+    if (this.connected || !this.peer) return;
+    try{
+      const c = this.peer.connect(otherId, { reliable:false, serialization:"json" });
+      if (c) this.bind(c, true);
+    }catch(e){}
+  },
+  bind(c, outgoing){
+    c.on("open", ()=>{
+      // prefer a single connection
+      if (this.connected && this.conn && this.conn !== c){ try{c.close();}catch(e){} return; }
+      this.conn = c; this.connected = true;
+      clearInterval(this.retry);
+      this.setStatus(true,"connected 💞");
+      sysMsg(`${CONFIG.NAMES[ME.other]} is here! Say hi 👋`);
+      // send a hello with our position
+      this.send({ t:"hello" });
+    });
+    c.on("data", (d)=> this.onData(d));
+    c.on("close", ()=>{
+      if (this.conn === c){ this.connected=false; this.conn=null;
+        this.setStatus(false,"partner left…");
+        sysMsg(`${CONFIG.NAMES[ME.other]} disconnected.`);
+        const otherId = `${CONFIG.ROOM}-${ME.other}`;
+        this.retry = setInterval(()=>{ if(!this.connected) this.tryConnect(otherId); }, 4000);
+      }
+    });
+    c.on("error", ()=>{});
+  },
+  onData(d){
+    if (!d || !d.t) return;
+    if (d.t==="pos"){
+      const ch = characters[ME.other];
+      ch.userData.target.set(d.x, 0, d.z);
+      ch.userData.netRot = d.r;
+    } else if (d.t==="chat"){
+      addChat(ME.other, d.m);
+      showBubble(ME.other, d.m);
+      Audio_.pop();
+    } else if (d.t==="hello"){
+      // reply so both see each other immediately
+      this.send({ t:"pos", x:characters[ME.who].position.x, z:characters[ME.who].position.z, r:characters[ME.who].rotation.y });
+    } else if (d.t==="candles"){
+      setCandles(d.lit);
+    } else if (d.t==="portal"){
+      unlockPortal(true);
+    }
+  },
+  send(obj){ if (this.connected && this.conn){ try{ this.conn.send(obj); }catch(e){} } },
+  setStatus(on, text){
+    const dot=$("conn-dot"); dot.className = "dot " + (on?"on":"off");
+    $("conn-text").textContent = text;
+  }
+};
+
+// Local fallback channel so two tabs on the SAME machine can also play/test.
+let bc = null;
+try {
+  bc = new BroadcastChannel("ansu-saya-love-world");
+  bc.onmessage = (ev)=>{
+    const d = ev.data;
+    if (!d || d.from === ME.who) return;            // ignore our own
+    if (!ME.who) return;
+    if (d.t==="pos" && d.from===ME.other){
+      characters[ME.other].userData.target.set(d.x,0,d.z);
+      characters[ME.other].userData.netRot = d.r;
+      if (!Net.connected) Net.setStatus(true,"connected (local) 💞");
+    } else if (d.t==="chat" && d.from===ME.other){
+      addChat(ME.other, d.m); showBubble(ME.other, d.m); Audio_.pop();
+    } else if (d.t==="candles"){ setCandles(d.lit); }
+    else if (d.t==="portal"){ unlockPortal(true); }
+  };
+} catch(e){}
+
+function netBroadcast(obj){
+  Net.send(obj);
+  if (bc){ try{ bc.postMessage(Object.assign({ from:ME.who }, obj)); }catch(e){} }
+}
+
+/* =====================================================================
+   7. CHAT UI
+   ===================================================================== */
+const feed = $("chat-feed");
+function addChat(who, text){
+  const d = document.createElement("div");
+  d.className = "msg " + who;
+  d.innerHTML = `<span class="who">${CONFIG.NAMES[who]}:</span>${escapeHtml(text)}`;
+  feed.appendChild(d); feed.scrollTop = feed.scrollHeight;
+}
+function sysMsg(text){
+  const d=document.createElement("div"); d.className="msg system"; d.textContent="• "+text;
+  feed.appendChild(d); feed.scrollTop=feed.scrollHeight;
+}
+function escapeHtml(s){ return s.replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+
+$("chat-form").addEventListener("submit", (e)=>{
+  e.preventDefault();
+  const inp = $("chat-input"); const text = inp.value.trim();
+  if (!text || !ME.who) return;
+  inp.value = "";
+  addChat(ME.who, text);
+  showBubble(ME.who, text);
+  Audio_.pop();
+  netBroadcast({ t:"chat", m:text });
+});
+
+/* =====================================================================
+   8. INTERACTIONS: cake candles + portal
+   ===================================================================== */
+const prompt = $("prompt");
+let currentInteraction = null;   // "cake" | "portal" | null
+
+function setCandles(lit){
+  candlesLit = lit;
+  candleFlames.forEach(f=> f.visible = lit);
+}
+function blowCandles(){
+  if (!candlesLit) { // relight playfully
+    setCandles(true); netBroadcast({ t:"candles", lit:true });
+    showBubble(ME.who, "Re-lit! 🔥 wish again?"); return;
+  }
+  setCandles(false);
+  netBroadcast({ t:"candles", lit:false });
+  Audio_.pop();
+  // pop puff particles at cake
+  burstHeartsAtWorld(cake.position.clone().add(new THREE.Vector3(0,3,0)), "💨", 10);
+  showBubble(ME.who, "Make a wish! 🎂✨");
+  setTimeout(()=>{ if(!candlesLit){ setCandles(true); netBroadcast({t:"candles",lit:true}); } }, 9000);
+}
+
+function unlockPortal(fromNet){
+  if (WORLD.portalUnlocked) return;
+  WORLD.portalUnlocked = true;
+  sysMsg("The portal slides open… welcome to our gallery 💖");
+  if (!fromNet) netBroadcast({ t:"portal" });
+  // animate door sliding up
+  const door = portal.door; const startY = door.position.y; const endY = startY + 9.5;
+  const t0 = performance.now();
+  (function slide(){
+    const k = Math.min(1, (performance.now()-t0)/1200);
+    door.position.y = startY + (endY-startY)*easeOut(k);
+    if (k<1) requestAnimationFrame(slide);
+  })();
+}
+function easeOut(t){ return 1-Math.pow(1-t,3); }
+
+function tryInteract(){
+  if (currentInteraction === "cake") blowCandles();
+  else if (currentInteraction === "portal" && !WORLD.portalUnlocked) openPassModal();
+}
+
+// prompt tap also interacts (mobile)
+prompt.addEventListener("click", tryInteract);
+
+// ---- Password modal logic ----
+const passModal = $("pass-modal");
+function openPassModal(){ passModal.style.display="flex"; $("pass-err").textContent=""; $("pass-input").value=""; setTimeout(()=>$("pass-input").focus(),50); }
+function closePassModal(){ passModal.style.display="none"; }
+$("pass-cancel").addEventListener("click", closePassModal);
+$("pass-ok").addEventListener("click", checkPass);
+$("pass-input").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); checkPass(); } });
+function checkPass(){
+  const v = $("pass-input").value.trim().toLowerCase();
+  if (v === CONFIG.PORTAL_PASSWORD){ closePassModal(); unlockPortal(false); burstHeartsScreen(window.innerWidth/2, window.innerHeight/2, 16); Audio_.boing(); }
+  else { $("pass-err").textContent = "Hmm, not quite… try a sweet nickname 😉"; $("pass-input").value=""; }
+}
+
+/* =====================================================================
+   9. CLICK FX: boing + heart particles
+   ===================================================================== */
+function burstHeartsScreen(x, y, count){
+  const emojis = ["❤️","💖","💕","💗","💞","🩷"];
+  for (let i=0;i<count;i++){
+    const el = document.createElement("div");
+    el.className = "heart-particle";
+    el.textContent = emojis[Math.floor(Math.random()*emojis.length)];
+    el.style.left = x+"px"; el.style.top = y+"px";
+    const ang = Math.random()*Math.PI*2;
+    const dist = 60 + Math.random()*120;
+    const dx = Math.cos(ang)*dist;
+    const dy = Math.sin(ang)*dist - 80;
+    el.style.fontSize = (16+Math.random()*18)+"px";
+    document.body.appendChild(el);
+    const t0 = performance.now(); const dur = 800+Math.random()*500;
+    (function anim(){
+      const k = Math.min(1,(performance.now()-t0)/dur);
+      el.style.transform = `translate(${dx*k}px, ${dy*k}px) scale(${1-0.3*k}) rotate(${k*180}deg)`;
+      el.style.opacity = String(1-k);
+      if (k<1) requestAnimationFrame(anim); else el.remove();
+    })();
+  }
+}
+const _tmpV = new THREE.Vector3();
+function burstHeartsAtWorld(vec3, emoji, count){
+  vec3.project(camera);
+  const x = (vec3.x*0.5+0.5)*window.innerWidth;
+  const y = (-vec3.y*0.5+0.5)*window.innerHeight;
+  for (let i=0;i<count;i++){
+    const el=document.createElement("div"); el.className="heart-particle"; el.textContent=emoji||"💖";
+    el.style.left=x+"px"; el.style.top=y+"px";
+    const ang=Math.random()*Math.PI*2, dist=40+Math.random()*90;
+    const dx=Math.cos(ang)*dist, dy=Math.sin(ang)*dist-60;
+    document.body.appendChild(el);
+    const t0=performance.now(), dur=700+Math.random()*400;
+    (function a(){ const k=Math.min(1,(performance.now()-t0)/dur);
+      el.style.transform=`translate(${dx*k}px,${dy*k}px) scale(${1-0.4*k})`; el.style.opacity=String(1-k);
+      if(k<1) requestAnimationFrame(a); else el.remove(); })();
+  }
+}
+
+canvas.addEventListener("pointerdown", (e)=>{
+  if (!ME.who) return;
+  // alternate boing / pop for variety
+  if (Math.random()<0.5) Audio_.boing(); else Audio_.pop();
+  burstHeartsScreen(e.clientX, e.clientY, 8);
+});
+
+/* =====================================================================
+   10. MOBILE JOYSTICK
+   ===================================================================== */
+(function joystick(){
+  const isTouch = ("ontouchstart" in window) || navigator.maxTouchPoints>0;
+  if (!isTouch) return;
+  const js = $("joystick"); const stick = $("stick");
+  js.style.display = "block";
+  let active=false, cx=0, cy=0, R=44;
+  function start(t){ active=true; const r=js.getBoundingClientRect(); cx=r.left+r.width/2; cy=r.top+r.height/2; mv(t); }
+  function mv(t){
+    if(!active) return;
+    let dx=t.clientX-cx, dy=t.clientY-cy;
+    const d=Math.hypot(dx,dy); if(d>R){ dx=dx/d*R; dy=dy/d*R; }
+    stick.style.transform=`translate(${dx-27}px,${dy-27}px)`;
+    move.x = dx/R; move.z = dy/R;
+  }
+  function end(){ active=false; move.x=0; move.z=0; stick.style.transform="translate(-50%,-50%)"; }
+  js.addEventListener("touchstart",(e)=>{ e.preventDefault(); start(e.touches[0]); },{passive:false});
+  js.addEventListener("touchmove",(e)=>{ e.preventDefault(); mv(e.touches[0]); },{passive:false});
+  js.addEventListener("touchend",(e)=>{ e.preventDefault(); end(); },{passive:false});
+})();
+
+/* =====================================================================
+   11. MAIN LOOP
+   ===================================================================== */
+const clock = new THREE.Clock();
+const camTarget = new THREE.Vector3();
+const camDesired = new THREE.Vector3();
+
+function nearestInteraction(){
+  if (!ME.who) return null;
+  const p = characters[ME.who].position;
+  if (p.distanceTo(cake.position) < 4.2) return "cake";
+  // near portal doorway (centered x≈0, z≈portal.z)
+  if (!WORLD.portalUnlocked && Math.abs(p.x) < 5 && Math.abs(p.z - portal.z) < 6) return "portal";
+  return null;
+}
+
+function updatePrompt(){
+  const it = nearestInteraction();
+  if (it !== currentInteraction){
+    currentInteraction = it;
+    if (it==="cake"){ prompt.style.display="block"; prompt.textContent = candlesLit ? "🎂 Press E / tap to blow the candles!" : "🎂 Press E / tap to re-light!"; }
+    else if (it==="portal"){ prompt.style.display="block"; prompt.textContent = "🔒 Press E / tap to enter the secret word"; }
+    else prompt.style.display="none";
+  } else if (it==="cake"){
+    prompt.textContent = candlesLit ? "🎂 Press E / tap to blow the candles!" : "🎂 Press E / tap to re-light!";
+  }
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  // heart pulse + spin
+  if (heartMesh){
+    const s = 4 + Math.sin(t*2.2)*0.35;
+    heartMesh.scale.set(s,s,s);
+    heartMesh.rotation.y += dt*0.4;
+    heartMesh.position.y = 11 + Math.sin(t*1.3)*0.6;
+  }
+  // flower sway
+  if (WORLD.flowers) for (const f of WORLD.flowers){ f.rotation.z = Math.sin(t*1.5 + f.userData.sway)*0.12; }
+  // candle flicker
+  if (candlesLit) candleFlames.forEach((f,i)=>{ f.scale.y = 1 + Math.sin(t*12+i)*0.25; });
+
+  // ---- my movement ----
+  if (ME.who){
+    const me = characters[ME.who];
+    let ix = 0, iz = 0;
+    if (keys["w"]||keys["arrowup"]) iz -= 1;
+    if (keys["s"]||keys["arrowdown"]) iz += 1;
+    if (keys["a"]||keys["arrowleft"]) ix -= 1;
+    if (keys["d"]||keys["arrowright"]) ix += 1;
+    ix += move.x; iz += move.z;
+    const len = Math.hypot(ix,iz);
+    let moving = len > 0.08;
+    if (moving){
+      ix/=Math.max(len,1); iz/=Math.max(len,1);
+      const speed = 9;
+      let nx = me.position.x + ix*speed*dt;
+      let nz = me.position.z + iz*speed*dt;
+      // bounds
+      nx = Math.max(-WORLD.bound, Math.min(WORLD.bound, nx));
+      nz = Math.max(-WORLD.bound, Math.min(WORLD.bound, nz));
+      // portal barrier (block crossing the wall unless unlocked, except via doorway)
+      if (nz < portal.z + 1){
+        const inDoorway = Math.abs(nx) < 4.2;
+        if (!(WORLD.portalUnlocked && inDoorway)){
+          nz = portal.z + 1;
+        }
+      }
+      me.position.x = nx; me.position.z = nz;
+      me.rotation.y = Math.atan2(ix, iz);
+    }
+    me.userData.moving = moving;
+
+    // throttle network position broadcast
+    if (me.position.distanceTo(lastPos) > 0.05){
+      lastPos.copy(me.position);
+      netBroadcast({ t:"pos", x:+me.position.x.toFixed(2), z:+me.position.z.toFixed(2), r:+me.rotation.y.toFixed(2) });
+    }
+
+    // camera follow
+    camDesired.set(me.position.x, 9, me.position.z + 16);
+    camera.position.lerp(camDesired, 1-Math.pow(0.001, dt));
+    camTarget.lerp(new THREE.Vector3(me.position.x, 2.5, me.position.z), 1-Math.pow(0.001, dt));
+    camera.lookAt(camTarget);
+
+    updatePrompt();
+  }
+
+  // ---- remote character smoothing ----
+  if (ME.other){
+    const oc = characters[ME.other];
+    const before = oc.position.clone();
+    oc.position.lerp(oc.userData.target, 1-Math.pow(0.0001, dt));
+    oc.userData.moving = before.distanceTo(oc.position) > 0.01;
+    if (typeof oc.userData.netRot === "number"){
+      // smooth rotate toward target heading
+      let dr = oc.userData.netRot - oc.rotation.y;
+      while (dr > Math.PI) dr -= Math.PI*2; while (dr < -Math.PI) dr += Math.PI*2;
+      oc.rotation.y += dr * Math.min(1, dt*10);
+    }
+  }
+
+  // ---- character funny animation (wobble + bounce) ----
+  for (const key of ["ansu","saya"]){
+    const ch = characters[key]; const u = ch.userData;
+    if (u.moving){
+      u.walkPhase += dt*14;
+      u.inner.position.y = Math.abs(Math.sin(u.walkPhase))*0.35;      // bounce
+      u.inner.rotation.z = Math.sin(u.walkPhase)*0.18;                // penguin wobble
+      u.armL.rotation.x = Math.sin(u.walkPhase)*0.9;
+      u.armR.rotation.x = -Math.sin(u.walkPhase)*0.9;
+      // squash & stretch
+      const sq = 1 + Math.sin(u.walkPhase*2)*0.06;
+      u.inner.scale.set(1/sq, sq, 1/sq);
+    } else {
+      // idle breathing
+      u.inner.position.y += (0 - u.inner.position.y)*Math.min(1,dt*8);
+      u.inner.rotation.z += (0 - u.inner.rotation.z)*Math.min(1,dt*8);
+      const br = 1 + Math.sin(t*2 + (key==="ansu"?0:1))*0.02;
+      u.inner.scale.set(1, br, 1);
+      u.armL.rotation.x += (0-u.armL.rotation.x)*Math.min(1,dt*8);
+      u.armR.rotation.x += (0-u.armR.rotation.x)*Math.min(1,dt*8);
+    }
+  }
+
+  // ---- update DOM nametags & bubbles ----
+  for (const key of ["ansu","saya"]){
+    const ch = characters[key];
+    ch.userData.head.getWorldPosition(_tmpV);
+    _tmpV.y += 1.1;
+    const proj = _tmpV.clone().project(camera);
+    const sx = (proj.x*0.5+0.5)*window.innerWidth;
+    const sy = (-proj.y*0.5+0.5)*window.innerHeight;
+    const visible = proj.z < 1;
+    const tag = tags[key];
+    tag.style.display = visible ? "block" : "none";
+    tag.style.left = sx+"px"; tag.style.top = sy+"px";
+    if (bubbles[key]){
+      bubbles[key].style.left = sx+"px";
+      bubbles[key].style.top = (sy-22)+"px";
+      bubbles[key].style.display = visible ? "block" : "none";
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+/* =====================================================================
+   12. START: character selection
+   ===================================================================== */
+document.querySelectorAll(".pick").forEach(btn=>{
+  btn.addEventListener("click", ()=>{
+    const who = btn.dataset.who;
+    ME.who = who; ME.other = who==="ansu" ? "saya" : "ansu";
+    // dim my own tag emphasis: nothing needed, both shown
+    $("overlay").style.opacity = "0";
+    $("overlay").style.transition = "opacity .5s";
+    setTimeout(()=> $("overlay").remove(), 520);
+    // start music (user gesture) + audio ctx for SFX
+    Audio_.start();
+    // welcome
+    sysMsg(`You are ${CONFIG.NAMES[who]}. Use WASD / joystick to move.`);
+    // begin networking
+    Net.start();
+    // fade help after a while
+    setTimeout(()=>{ const h=$("help"); if(h) h.style.opacity="0.0"; }, 12000);
+    // little welcome heart burst
+    setTimeout(()=> burstHeartsScreen(window.innerWidth/2, window.innerHeight*0.4, 14), 300);
+  });
+});
+</script>
+</body>
+</html>
