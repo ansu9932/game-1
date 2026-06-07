@@ -651,6 +651,10 @@ let candlesLit = true;
   scene.add(cake);
 })();
 
+// Shared texture loader — declared here so the gallery photos (built below in
+// this IIFE) can use it, and the characters in Section 4 reuse the same one.
+const texLoader = new THREE.TextureLoader();
+
 // ---- Portal wall + gallery room ----
 const portal = { group:new THREE.Group(), door:null, z:-30 };
 (function buildPortal(){
@@ -690,16 +694,17 @@ const portal = { group:new THREE.Group(), door:null, z:-30 };
   const sideR = sideL.clone(); sideR.position.set(17,6,-42); room.add(sideR);
   // soft light inside
   const roomLight = new THREE.PointLight(0xffd1e6, 1.2, 60); roomLight.position.set(0,9,-44); room.add(roomLight);
-  // photo frames on back wall
-  const captions = ["Our First Date 💕","That Goofy Trip ✈️","Best Smile Ever 😄","Forever You & Me ♾️","My Favorite Hello 👋","Future Us 🏡"];
+  // photo frames on back wall — real images loaded from ./assets/
+  const photoFiles = ["date1.jpg", "trip1.jpg", "smile1.jpg", "forever1.jpg", "hello1.jpg", "future1.jpg"];
   for (let i=0;i<6;i++){
     const col = i%3, rowi = Math.floor(i/3);
     const fx = -10 + col*10, fy = 8 - rowi*4.5;
     const frameM = new THREE.Mesh(new THREE.BoxGeometry(6,3.4,0.3),
       new THREE.MeshStandardMaterial({ color:0xffd700, emissive:0x554400, emissiveIntensity:0.3 }));
     frameM.position.set(fx, fy, -52.5); room.add(frameM);
+    const realPhotoTex = texLoader.load(`./assets/${photoFiles[i]}`);
     const photo = new THREE.Mesh(new THREE.PlaneGeometry(5.4,2.9),
-      new THREE.MeshBasicMaterial({ map: makePhotoTexture(captions[i], i) }));
+      new THREE.MeshBasicMaterial({ map: realPhotoTex }));
     photo.position.set(fx, fy, -52.2); room.add(photo);
   }
   scene.add(room);
@@ -724,7 +729,7 @@ function makePhotoTexture(caption, idx){
 /* =====================================================================
    4. CHARACTERS (wobbly penguins with face-textured box heads)
    ===================================================================== */
-const texLoader = new THREE.TextureLoader();
+// (texLoader is declared earlier, near the gallery, and reused here.)
 
 // Generates a cute fallback face texture if the local PNG is missing.
 function fallbackFace(who){
