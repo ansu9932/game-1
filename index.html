@@ -145,6 +145,34 @@
   }
   #chat-send:active{ transform:scale(.93); }
 
+  /* ---------- Chat: minimize button + mobile launcher ---------- */
+  .chat-head-right{ display:flex; align-items:center; gap:8px; }
+  #chat-min{
+    display:none;                 /* shown only on mobile */
+    align-items:center; justify-content:center;
+    width:26px; height:26px; border-radius:50%; cursor:pointer;
+    border:none; background:rgba(255,255,255,0.28); color:#fff;
+    font-size:15px; line-height:1; font-family:var(--font);
+  }
+  #chat-min:active{ transform:scale(.9); }
+  #chat-fab{
+    position:fixed; left:12px; bottom:12px; z-index:31;
+    display:none;                 /* shown only on mobile (collapsed state) */
+    align-items:center; gap:8px; cursor:pointer;
+    padding:11px 16px; border-radius:18px;
+    color:#fff; font-weight:bold; font-size:14px; font-family:var(--font);
+    background:rgba(226,59,120,0.55);
+    border:1px solid rgba(255,255,255,0.4); box-shadow:var(--shadow);
+    transition:transform .12s ease;
+  }
+  #chat-fab:active{ transform:scale(.95); }
+  #chat-fab.unread::after{
+    content:''; position:absolute; top:-4px; right:-4px;
+    width:14px; height:14px; border-radius:50%;
+    background:#ffd23f; border:2px solid #fff; animation:fabping 1s ease-in-out infinite;
+  }
+  @keyframes fabping{ 0%,100%{transform:scale(1)} 50%{transform:scale(1.35)} }
+
   /* ---------- Floating UI: nametags & speech bubbles ---------- */
   #world-ui{ position:fixed; inset:0; z-index:20; pointer-events:none; overflow:hidden; }
   .nametag{
@@ -223,11 +251,26 @@
   }
   #help b{ color:#ffe; }
 
+  /* ---------- Mobile (<=768px): auto-minimized chat ---------- */
+  @media (max-width:768px){
+    /* The full chat window starts hidden (slid down) and only the slim
+       "💬 Love Chat" launcher shows in the bottom-left — clear of the
+       bottom-right movement joystick. */
+    #chat{
+      width:300px; max-width:calc(100vw - 24px);
+      transform:translateY(135%); opacity:0; pointer-events:none;
+      transition:transform .32s cubic-bezier(.17,.84,.44,1), opacity .25s ease;
+    }
+    #chat.open{ transform:translateY(0); opacity:1; pointer-events:auto; }
+    #chat.open ~ #chat-fab{ display:none; }   /* hide launcher while open */
+    #chat-feed{ height:130px; }
+    #chat-min{ display:flex; }
+    #chat-fab{ display:flex; }
+  }
+
   @media (max-width:640px){
     #help{ display:none; }
     #title-badge{ font-size:12px; padding:6px 12px; }
-    #chat{ width:260px; }
-    #chat-feed{ height:120px; }
   }
 </style>
 </head>
@@ -259,7 +302,10 @@
 <div id="chat" class="glass">
   <div id="chat-head">
     <span>💌 Love Chat</span>
-    <span id="chat-status"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></span>
+    <span class="chat-head-right">
+      <span id="chat-status"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></span>
+      <button id="chat-min" type="button" aria-label="Minimize chat" title="Minimize">▾</button>
+    </span>
   </div>
   <div id="chat-feed"></div>
   <form id="chat-form" autocomplete="off">
@@ -267,6 +313,11 @@
     <button id="chat-send" type="submit">➤</button>
   </form>
 </div>
+
+<!-- Minimized chat launcher (mobile) -->
+<button id="chat-fab" class="glass" type="button" aria-label="Open Love Chat">
+  <span class="dot" id="fab-dot"></span>💬 Love Chat
+</button>
 
 <!-- Interaction prompt -->
 <div id="prompt" class="glass"></div>
@@ -793,8 +844,12 @@ window.addEventListener("keyup", (e)=>{ keys[e.key.toLowerCase()] = false; });
    6. NETWORKING (PeerJS — deterministic IDs, no signup needed)
    ===================================================================== */
 const Net = {
-  peer:null, conn:null, connected:false, retry:null,
+  peer:null, conn:null, connected:false, retry:null, recreateTimer:null, tries:0, dead:false,
   start(){
+    this.dead = false;
+    this.createPeer();
+  },
+  createPeer(){
     const myId  = `${CONFIG.ROOM}-${ME.who}`;
     const otherId = `${CONFIG.ROOM}-${ME.other}`;
     try {
@@ -802,20 +857,47 @@ const Net = {
     } catch(e){ this.setStatus(false,"offline"); return; }
 
     this.peer.on("open", ()=>{
-      this.setStatus(false,"waiting for partner…");
+      this.tries = 0;
+      if (!this.connected) this.setStatus(false,"waiting for partner…");
       this.tryConnect(otherId);
+      clearInterval(this.retry);
       this.retry = setInterval(()=>{ if(!this.connected) this.tryConnect(otherId); }, 4000);
     });
     // someone connects to us
     this.peer.on("connection", (c)=>{ this.bind(c); });
     this.peer.on("error", (err)=>{
-      // "unavailable-id" => partner already took the slot OR we reloaded; "peer-unavailable" => not online yet
-      if (err && err.type === "unavailable-id"){
-        // recreate with a random suffix and connect outwards only
+      const type = err && err.type;
+      // Partner simply isn't online yet — the retry interval keeps trying.
+      if (type === "peer-unavailable") return;
+      // "unavailable-id"  => a stale (just-refreshed) session still owns our ID.
+      // network/server/socket errors => transient broker hiccups.
+      // In every one of these cases we tear the peer down and spin up a FRESH
+      // session on our deterministic ID, so we recover to green instead of
+      // getting stuck forever on "reconnecting…".
+      if (!this.connected){
         this.setStatus(false,"reconnecting…");
+        this.scheduleRecreate();
       }
     });
-    this.peer.on("disconnected", ()=>{ try{ this.peer.reconnect(); }catch(e){} });
+    this.peer.on("disconnected", ()=>{
+      if (this.dead) return;
+      try { this.peer.reconnect(); } catch(e){}
+    });
+  },
+  // Destroy the current peer and rebuild it after a short backoff. This is what
+  // breaks the post-refresh "reconnecting…" deadlock: once the broker releases
+  // the old ID, the rebuilt peer claims it cleanly and connects.
+  scheduleRecreate(){
+    if (this.dead || this.recreateTimer) return;
+    const delay = Math.min(1000 + this.tries*900, 5000);
+    this.tries++;
+    this.recreateTimer = setTimeout(()=>{
+      this.recreateTimer = null;
+      clearInterval(this.retry);
+      try { if (this.peer) this.peer.destroy(); } catch(e){}
+      this.peer = null;
+      if (!this.dead) this.createPeer();
+    }, delay);
   },
   tryConnect(otherId){
     if (this.connected || !this.peer) return;
@@ -830,6 +912,7 @@ const Net = {
       if (this.connected && this.conn && this.conn !== c){ try{c.close();}catch(e){} return; }
       this.conn = c; this.connected = true;
       clearInterval(this.retry);
+      clearTimeout(this.recreateTimer); this.recreateTimer = null; this.tries = 0;
       this.setStatus(true,"connected 💞");
       sysMsg(`${CONFIG.NAMES[ME.other]} is here! Say hi 👋`);
       // send a hello with our position
@@ -837,10 +920,12 @@ const Net = {
     });
     c.on("data", (d)=> this.onData(d));
     c.on("close", ()=>{
+      if (this.dead) return;
       if (this.conn === c){ this.connected=false; this.conn=null;
         this.setStatus(false,"partner left…");
         sysMsg(`${CONFIG.NAMES[ME.other]} disconnected.`);
         const otherId = `${CONFIG.ROOM}-${ME.other}`;
+        clearInterval(this.retry);
         this.retry = setInterval(()=>{ if(!this.connected) this.tryConnect(otherId); }, 4000);
       }
     });
@@ -867,10 +952,27 @@ const Net = {
   },
   send(obj){ if (this.connected && this.conn){ try{ this.conn.send(obj); }catch(e){} } },
   setStatus(on, text){
-    const dot=$("conn-dot"); dot.className = "dot " + (on?"on":"off");
+    const cls = "dot " + (on ? "on" : "off");
+    $("conn-dot").className = cls;
+    const fd = $("fab-dot"); if (fd) fd.className = cls;   // mirror onto launcher
     $("conn-text").textContent = text;
+  },
+  // Release our PeerJS ID + close the connection before the tab goes away so a
+  // reload doesn't collide with the stale session (the root cause of the
+  // sticky "reconnecting…" loop after a refresh).
+  cleanup(){
+    this.dead = true;
+    clearInterval(this.retry);
+    clearTimeout(this.recreateTimer);
+    try { if (this.conn) this.conn.close(); } catch(e){}
+    try { if (this.peer) this.peer.destroy(); } catch(e){}   // frees the ID on the broker
+    this.peer = null; this.conn = null; this.connected = false;
   }
 };
+
+// Cleanly drop the session on refresh/close -> next load connects fresh & green.
+window.addEventListener("beforeunload", ()=>{ try { Net.cleanup(); } catch(e){} });
+window.addEventListener("pagehide",     ()=>{ try { Net.cleanup(); } catch(e){} });
 
 // Local fallback channel so two tabs on the SAME machine can also play/test.
 let bc = null;
@@ -905,6 +1007,7 @@ function addChat(who, text){
   d.className = "msg " + who;
   d.innerHTML = `<span class="who">${CONFIG.NAMES[who]}:</span>${escapeHtml(text)}`;
   feed.appendChild(d); feed.scrollTop = feed.scrollHeight;
+  notifyChat();
 }
 function sysMsg(text){
   const d=document.createElement("div"); d.className="msg system"; d.textContent="• "+text;
@@ -922,6 +1025,31 @@ $("chat-form").addEventListener("submit", (e)=>{
   Audio_.pop();
   netBroadcast({ t:"chat", m:text });
 });
+
+/* ---- Mobile chat: minimize / expand ---- */
+const chatEl = $("chat"), chatFab = $("chat-fab");
+function isMobileChat(){ return window.matchMedia("(max-width:768px)").matches; }
+function openChat(){
+  chatEl.classList.add("open");
+  chatFab.classList.remove("unread");
+  setTimeout(()=>{ feed.scrollTop = feed.scrollHeight; }, 60);
+}
+function closeChat(){
+  chatEl.classList.remove("open");
+  if (document.activeElement === $("chat-input")) $("chat-input").blur();
+}
+function notifyChat(){
+  // Pulse the launcher when a message arrives while the chat is collapsed.
+  if (isMobileChat() && !chatEl.classList.contains("open")) chatFab.classList.add("unread");
+}
+chatFab.addEventListener("click", openChat);
+$("chat-min").addEventListener("click", (e)=>{ e.stopPropagation(); closeChat(); });
+// Tap outside the chat (on mobile) slides it back down.
+document.addEventListener("pointerdown", (e)=>{
+  if (!isMobileChat() || !chatEl.classList.contains("open")) return;
+  if (chatEl.contains(e.target) || chatFab.contains(e.target)) return;
+  closeChat();
+}, true);
 
 /* =====================================================================
    8. INTERACTIONS: cake candles + portal
