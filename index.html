@@ -9,12 +9,14 @@
   =====================================================================
   ANSU & SAYANTANI : OUR LITTLE LOVE WORLD
   A single-file 3D web game gift built with Three.js + PeerJS.
-  Features: auto background music + mute, click boing/pop + heart bursts,
-  real-time 2-player chat & movement sync, wobbly penguin characters,
-  candle-blowing cake, and a password portal to a photo gallery.
+  Features: dual-track romantic audio + mute, drag-to-look camera, click
+  boing/pop + heart bursts, real-time 2-player chat & movement sync, wobbly
+  penguin characters, candle-blowing cake, and a password portal to a gallery.
 
-  Music: "Fluffing a Duck" / "Monkeys Spinning Monkeys" by Kevin MacLeod
-  (incompetech.com) — Licensed under Creative Commons: By Attribution 4.0.
+  Audio: a soft romantic instrumental (./assets/romantic_bgm.mp3) loops from
+  the start; the moment the "baby" portal opens it cross-fades into
+  "Apocalypse" (./assets/apocalypse.mp3) which loops for the rest of the game.
+  Drop your own MP3s at those paths to customise the soundtrack.
   =====================================================================
 -->
 
@@ -242,8 +244,9 @@
 <!-- Help -->
 <div id="help" class="glass">
   <b>Move:</b> WASD / Arrows<br/>
+  <b>Look:</b> Drag screen to look around<br/>
   <b>Interact:</b> E (or tap prompt)<br/>
-  <b>Click anywhere</b> for hearts!<br/>
+  <b>Tap anywhere</b> for hearts!<br/>
   Find the glowing 💜 portal…
 </div>
 
@@ -311,12 +314,13 @@ const CONFIG = {
   // Deterministic shared room so the two of you always find each other.
   // Change ROOM if you ever want a fresh private room.
   ROOM: "ansu-sayantani-love-world-v1",
-  MUSIC_URLS: [
-    "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Fluffing%20a%20Duck.mp3",
-    "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Monkeys%20Spinning%20Monkeys.mp3",
-    "https://incompetech.com/music/royalty-free/mp3-royaltyfree/The%20Builder.mp3"
-  ],
-  PORTAL_PASSWORD: "babe",
+  MUSIC: {
+    // Soft, emotional romantic instrumental — loops softly from the start.
+    bgm:  "./assets/romantic_bgm.mp3",
+    // "Apocalypse" — takes over (looping) the instant the portal opens.
+    apoc: "./assets/apocalypse.mp3"
+  },
+  PORTAL_PASSWORD: "baby",
   FACE: { ansu: "./assets/ansu_face.png", saya: "./assets/sayantani_face.png" },
   NAMES: { ansu: "Ansu", saya: "Sayantani" }
 };
@@ -325,44 +329,69 @@ const CONFIG = {
 const $ = (id) => document.getElementById(id);
 
 /* =====================================================================
-   1. AUDIO  (background music + synth click SFX)
+   1. AUDIO  (dual-track music: romantic BGM -> "Apocalypse" + synth SFX)
    ===================================================================== */
 const Audio_ = {
-  el: null, muted: false, started: false, ctx: null,
+  bgm:null, apoc:null, current:null,
+  muted:false, started:false, ctx:null,
+  ROMANTIC_VOL:0.32,   // very soft & gentle
+  APOC_VOL:0.5,        // a touch fuller once the portal opens
   init(){
-    const a = new Audio();
-    a.loop = true; a.preload = "auto"; a.crossOrigin = "anonymous"; a.volume = 0;
-    let idx = 0;
-    a.src = CONFIG.MUSIC_URLS[idx];
-    a.addEventListener("error", () => {
-      idx++;
-      if (idx < CONFIG.MUSIC_URLS.length){ a.src = CONFIG.MUSIC_URLS[idx]; a.play().catch(()=>{}); }
-    });
-    this.el = a;
+    // Track 1 — soft romantic instrumental (plays from the start).
+    this.bgm = new Audio(CONFIG.MUSIC.bgm);
+    this.bgm.loop = true; this.bgm.preload = "auto"; this.bgm.volume = 0;
+    // Track 2 — "Apocalypse" (starts only after the portal opens).
+    this.apoc = new Audio(CONFIG.MUSIC.apoc);
+    this.apoc.loop = true; this.apoc.preload = "auto"; this.apoc.volume = 0;
+  },
+  // Per-track target volume (respects the active/inactive distinction).
+  targetVol(track){ return track === this.apoc ? this.APOC_VOL : this.ROMANTIC_VOL; },
+  // Time-based fade so it stays smooth regardless of frame rate.
+  fade(track, target, dur){
+    if (!track) return;
+    dur = dur || 700;
+    const start = track.volume, t0 = performance.now();
+    const tick = ()=>{
+      const k = Math.min(1, (performance.now() - t0) / dur);
+      track.volume = Math.max(0, Math.min(1, start + (target - start) * k));
+      if (k < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  },
+  // Robustly start a track, retrying on the next gesture if autoplay is blocked.
+  playTrack(track){
+    track.play()
+      .then(()=>{ if (this.current === track) this.fade(track, this.muted ? 0 : this.targetVol(track)); })
+      .catch(()=>{
+        const retry = ()=>{
+          track.play().then(()=>{ if (this.current === track) this.fade(track, this.muted ? 0 : this.targetVol(track)); }).catch(()=>{});
+          window.removeEventListener("pointerdown", retry);
+        };
+        window.addEventListener("pointerdown", retry);
+      });
   },
   // Called from a user gesture (character selection) to satisfy autoplay rules.
   start(){
     if (this.started) return;
     this.started = true;
     try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){}
-    const a = this.el;
-    a.play().then(()=>this.fadeTo(this.muted?0:0.45)).catch(()=>{
-      // Autoplay still blocked? retry on next interaction.
-      const retry = ()=>{ a.play().then(()=>this.fadeTo(this.muted?0:0.45)).catch(()=>{}); window.removeEventListener("pointerdown",retry); };
-      window.addEventListener("pointerdown", retry);
-    });
+    this.current = this.bgm;
+    this.playTrack(this.bgm);
   },
-  fadeTo(target){
-    const a = this.el; if(!a) return;
-    const step = (target - a.volume) / 20;
-    let i = 0;
-    const tick = ()=>{ i++; a.volume = Math.max(0, Math.min(1, a.volume + step));
-      if (i < 20) requestAnimationFrame(tick); else a.volume = target; };
-    requestAnimationFrame(tick);
+  // Portal "Apocalypse" event: fade out romantic BGM, loop Apocalypse forever.
+  switchToApocalypse(){
+    if (!this.started || this.current === this.apoc) return;
+    const old = this.bgm;
+    this.fade(old, 0, 1400);
+    setTimeout(()=>{ try { old.pause(); old.currentTime = 0; } catch(e){} }, 1500);
+    this.current = this.apoc;
+    this.apoc.volume = 0;
+    this.playTrack(this.apoc);
   },
+  // Mute toggle — always acts on whichever track is currently active.
   toggleMute(){
     this.muted = !this.muted;
-    this.fadeTo(this.muted ? 0 : 0.45);
+    if (this.current) this.fade(this.current, this.muted ? 0 : this.targetVol(this.current), 400);
     $("mute-btn").firstChild.nodeValue = this.muted ? "🔇 " : "🔊 ";
     $("mute-label").textContent = this.muted ? "Muted" : "Music";
   },
@@ -922,6 +951,7 @@ function unlockPortal(fromNet){
   if (WORLD.portalUnlocked) return;
   WORLD.portalUnlocked = true;
   sysMsg("The portal slides open… welcome to our gallery 💖");
+  Audio_.switchToApocalypse();      // romantic BGM -> "Apocalypse" (loops on)
   if (!fromNet) netBroadcast({ t:"portal" });
   // animate door sliding up
   const door = portal.door; const startY = door.position.y; const endY = startY + 9.5;
@@ -998,12 +1028,42 @@ function burstHeartsAtWorld(vec3, emoji, count){
   }
 }
 
-canvas.addEventListener("pointerdown", (e)=>{
-  if (!ME.who) return;
-  // alternate boing / pop for variety
-  if (Math.random()<0.5) Audio_.boing(); else Audio_.pop();
-  burstHeartsScreen(e.clientX, e.clientY, 8);
-});
+/* ---- Camera look controls: drag to orbit the view around your character ----
+   Works with mouse (desktop) and touch (mobile) via Pointer Events. The
+   movement joystick lives on its OWN element, so finger-drags on the canvas
+   never fight the joystick (they can even be used at the same time with two
+   fingers). A quick stationary tap is treated as a click -> boing + hearts. */
+const CAM = { yaw:0, pitch:0.5, dist:18, minPitch:0.12, maxPitch:1.30 };
+(function cameraDrag(){
+  let dragId = null, lastX = 0, lastY = 0, moved = 0;
+  const ROT = 0.005;            // radians per pixel
+  canvas.addEventListener("pointerdown", (e)=>{
+    if (dragId !== null) return;            // already orbiting with another finger
+    dragId = e.pointerId; lastX = e.clientX; lastY = e.clientY; moved = 0;
+    try { canvas.setPointerCapture(e.pointerId); } catch(_){}
+  });
+  canvas.addEventListener("pointermove", (e)=>{
+    if (e.pointerId !== dragId) return;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    CAM.yaw   -= dx * ROT;                                   // left/right pan
+    CAM.pitch += dy * ROT;                                   // up/down tilt
+    CAM.pitch  = Math.max(CAM.minPitch, Math.min(CAM.maxPitch, CAM.pitch));
+  });
+  function endDrag(e){
+    if (e.pointerId !== dragId) return;
+    try { canvas.releasePointerCapture(e.pointerId); } catch(_){}
+    dragId = null;
+    // A near-stationary press = a tap -> funny FX + heart particles.
+    if (moved < 8 && ME.who){
+      if (Math.random() < 0.5) Audio_.boing(); else Audio_.pop();
+      burstHeartsScreen(e.clientX, e.clientY, 8);
+    }
+  }
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+})();
 
 /* =====================================================================
    10. MOBILE JOYSTICK
@@ -1034,6 +1094,7 @@ canvas.addEventListener("pointerdown", (e)=>{
 const clock = new THREE.Clock();
 const camTarget = new THREE.Vector3();
 const camDesired = new THREE.Vector3();
+const _camLook = new THREE.Vector3();   // reused each frame (no per-frame allocs)
 
 function nearestInteraction(){
   if (!ME.who) return null;
@@ -1110,10 +1171,16 @@ function animate(){
       netBroadcast({ t:"pos", x:+me.position.x.toFixed(2), z:+me.position.z.toFixed(2), r:+me.rotation.y.toFixed(2) });
     }
 
-    // camera follow
-    camDesired.set(me.position.x, 9, me.position.z + 16);
+    // camera follow + drag-orbit (yaw/pitch come from CAM, set by dragging)
+    const cp = Math.cos(CAM.pitch), sp = Math.sin(CAM.pitch);
+    const syaw = Math.sin(CAM.yaw), cyaw = Math.cos(CAM.yaw);
+    camDesired.set(
+      me.position.x + syaw * cp * CAM.dist,
+      2.5 + sp * CAM.dist,
+      me.position.z + cyaw * cp * CAM.dist
+    );
     camera.position.lerp(camDesired, 1-Math.pow(0.001, dt));
-    camTarget.lerp(new THREE.Vector3(me.position.x, 2.5, me.position.z), 1-Math.pow(0.001, dt));
+    camTarget.lerp(_camLook.set(me.position.x, 2.5, me.position.z), 1-Math.pow(0.001, dt));
     camera.lookAt(camTarget);
 
     updatePrompt();
